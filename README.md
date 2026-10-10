@@ -1,10 +1,11 @@
 # Wireless Triage Pipeline
 
-Automated root-cause triage for BPSK / QPSK / 16-QAM wireless test cases.
+Automated root-cause triage for BPSK / QPSK / 16-QAM wireless test cases.  
+Upload real IQ data **or** simulate a signal — get a diagnosis instantly.
 
 ## Stack
 
-Python · scikit-learn · NumPy · Pandas · Matplotlib · FastAPI · Docker · GitHub Actions
+Python · scikit-learn · NumPy · Pandas · Matplotlib · FastAPI · Streamlit · Docker · GitHub Actions
 
 ---
 
@@ -17,14 +18,18 @@ wireless-triage/
 ├── ml_impairment_detector.py  # RandomForest: RF features → PASS/FAIL
 ├── ml_failure_categorizer.py  # TF-IDF + Logistic Regression: log text → failure category
 ├── triage_engine.py           # Root-cause engine combining both models
-├── api.py                     # FastAPI REST service
+├── iq_processor.py            # Real IQ file parser + blind feature extraction
+├── api.py                     # FastAPI REST service (includes IQ upload endpoint)
+├── ui.py                      # Streamlit UI (upload tab + simulator tab)
 ├── visualize.py               # Exploratory plots
 ├── train_all.py               # One-shot bootstrap script
+├── supervisord.conf           # Runs FastAPI + Streamlit together in Docker
 ├── requirements.txt
 ├── Dockerfile
 ├── .github/workflows/ci.yml   # GitHub Actions CI/CD
 └── tests/
     ├── test_signal_generator.py
+    ├── test_iq_processor.py
     └── test_api.py
 ```
 
@@ -38,13 +43,23 @@ wireless-triage/
 pip install -r requirements.txt
 ```
 
-### 2. Bootstrap (generate data + train models + initial triage)
+### 2. Bootstrap (generate data + train models)
 
 ```bash
 python train_all.py
 ```
 
-### 3. Run the API
+### 3. Run the Streamlit UI
+
+```bash
+streamlit run ui.py
+```
+
+Opens at http://localhost:8501 — two tabs:
+- **Upload Real IQ Data** — upload a `.csv/.npy/.bin/.txt` file from your SDR or analyser
+- **Simulate Signal** — tune SNR, frequency offset, interference with sliders
+
+### 4. Run the REST API
 
 ```bash
 uvicorn api:app --reload
@@ -52,51 +67,66 @@ uvicorn api:app --reload
 
 Interactive docs: http://localhost:8000/docs
 
-### 4. Generate visualizations
+---
+
+## Real IQ File Upload
+
+### Supported formats
+
+| Format | Description |
+|--------|-------------|
+| `.csv` | Two columns: `I` and `Q` (or `real`/`imag`) |
+| `.npy` | NumPy complex array or shape `(N, 2)` float |
+| `.bin` | Raw interleaved float32: I₀ Q₀ I₁ Q₁ … |
+| `.txt` | Whitespace-separated I Q pairs, one per line |
+
+### Get a sample file
 
 ```bash
-python visualize.py
+# Download a sample QPSK IQ CSV at 15 dB SNR
+curl "http://localhost:8000/triage/sample-iq?modulation=QPSK&snr_db=15" -o sample.csv
+```
+
+Or click the **Download sample file** button in the UI.
+
+### Upload via API
+
+```bash
+curl -X POST http://localhost:8000/triage/iq-upload \
+  -F "file=@my_capture.csv" \
+  -F "modulation=QPSK"
 ```
 
 ---
 
-## Key Endpoints
+## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Liveness + model readiness check |
-| POST | `/triage/case` | Full triage on one test case |
+| GET | `/health` | Liveness + model readiness |
+| POST | `/triage/case` | Full triage on simulated test case |
+| POST | `/triage/iq-upload` | **Upload real IQ file → diagnosis** |
+| GET | `/triage/sample-iq` | Download sample IQ CSV |
 | POST | `/triage/batch` | Batch triage over `data/test_log.csv` |
 | GET | `/triage/summary` | Pre-computed summary report |
 | GET | `/triage/report` | Full per-case JSON report |
 | POST | `/predict/impairment` | Direct RF impairment detection |
 | POST | `/predict/category` | Log message failure classification |
 
-### Example: triage a single case
-
-```bash
-curl -X POST http://localhost:8000/triage/case \
-  -H "Content-Type: application/json" \
-  -d '{
-    "modulation": "QPSK",
-    "snr_db": 10.0,
-    "freq_offset": 0.03,
-    "interference_power": 0.2,
-    "case_id": 1
-  }'
-```
-
 ---
 
-## Docker
+## Docker (runs both UI + API)
 
 ```bash
-# Build (trains models during build)
+# Build
 docker build -t wireless-triage .
 
 # Run
-docker run -p 8000:8000 wireless-triage
+docker run -p 8000:8000 -p 8501:8501 wireless-triage
 ```
+
+- UI:  http://localhost:8501
+- API: http://localhost:8000/docs
 
 ---
 
@@ -106,16 +136,6 @@ docker run -p 8000:8000 wireless-triage
 |-------|-----------|-------|--------|
 | Impairment Detector | Random Forest | Signal features (EVM, BER, phase std, …) | PASS / FAIL |
 | Failure Categorizer | TF-IDF + Logistic Regression | Test log message text | HIGH_EVM / HIGH_BER / PHASE_NOISE / MULTIPLE / PASS |
-
----
-
-## Impairments Simulated
-
-| Impairment | Parameter |
-|------------|-----------|
-| AWGN | SNR: 5–30 dB |
-| Frequency offset | 0–0.05 (normalised) |
-| Sinusoidal interference | Power: 0–0.3 |
 
 ---
 

@@ -1,30 +1,30 @@
 # ---------------------------------------------------------------------------
-# Wireless Triage API — Docker image
+# Wireless Triage — Docker image
+# Runs both FastAPI (port 8000) and Streamlit UI (port 8501)
 # ---------------------------------------------------------------------------
 
 FROM python:3.11-slim
 
-# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
+        gcc supervisor \
         && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies first (layer cache)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source
 COPY . .
 
-# Create runtime directories
 RUN mkdir -p data models outputs
 
-# Pre-train models at build time so the container is self-contained.
-# Comment out this line if you prefer to mount pre-trained models via a volume.
+# Train models at build time
 RUN python train_all.py
 
-EXPOSE 8000
+# Supervisor config to run both services
+RUN mkdir -p /etc/supervisor/conf.d
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000 8501
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
